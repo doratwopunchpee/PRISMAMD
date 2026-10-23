@@ -3,6 +3,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { MMDLoader } from 'three/addons/loaders/MMDLoader.js';
 import { MMDAnimationHelper } from 'three/addons/animation/MMDAnimationHelper.js';
 import { OutlineEffect } from 'three/addons/effects/OutlineEffect.js';
+import { createKeyframes } from './keyframes.js';
 
 const LIBS = window.__LIBS;
 const VFS = 'https://appassets.androidplatform.net/vfs/';
@@ -111,7 +112,9 @@ const state = {
   audio: null,
   playing: false,
   physicsReady: false,
+  motionTime: 0,      // how far the MMD helper has been advanced (clamped to motion length)
 };
+let kf = null;        // keyframe engine, created before the main loop
 
 const manager = new THREE.LoadingManager();
 const loader = new MMDLoader(manager);
@@ -162,12 +165,17 @@ function setPlayButton() {
 
 // Time readout
 state.elapsed = 0;
-function getDuration() {
+function motionDur() {
   return Math.max(
     state.modelClip ? state.modelClip.duration : 0,
     state.cameraClip ? state.cameraClip.duration : 0,
-    state.audio && state.audio.buffer ? state.audio.buffer.duration : 0,
   );
+}
+function mediaDuration() {
+  return Math.max(motionDur(), state.audio && state.audio.buffer ? state.audio.buffer.duration : 0);
+}
+function getDuration() {
+  return Math.max(mediaDuration(), kf ? kf.endTime() : 0);
 }
 function fmt(t) {
   const m = Math.floor(t / 60);
@@ -223,8 +231,10 @@ function rebuildAnimation() {
   const mesh = state.mesh;
   if (mesh && helper.meshes.includes(mesh)) helper.remove(mesh);
   if (helper.camera === camera) helper.remove(camera);
-  if (state.audio && state.audio.isPlaying) state.audio.stop();
+  if (state.audio) { if (state.audio.isPlaying) state.audio.stop(); state.audio.offset = 0; }
   state.elapsed = 0;
+  state.motionTime = 0;
+  if (kf) kf.markDirty();
 
   if (mesh) {
     const params = { physics: state.physicsReady && $('optPhysics').checked };
@@ -334,6 +344,7 @@ async function loadModelZip(file) {
   mesh.frustumCulled = false;
   scene.add(mesh);
   captureMaterials(mesh);
+  if (kf) kf.clearForNewModel();
 
   await physicsInit;
   buildClips();
@@ -472,6 +483,7 @@ function captureMaterials(mesh) {
       transparent: m.transparent,
       side: m.side,
       visible: m.visible,
+      map: m.map || null,
     };
     if (op) {
       op._base = op.thickness > 0 ? op.thickness : 0.003;
@@ -548,6 +560,65 @@ function loadPropsUi() {
   $('matEdge').disabled = !matOutlineParams(m);
   $('matEdgeVal').textContent = m.userData._edgeMul.toFixed(1) + '×';
   $('matDouble').checked = m.side === THREE.DoubleSide;
+  updateTexUi(m);
+}
+
+/* ---- textures: add / replace / remove per material ---- */
+const texLoader = new THREE.TextureLoader();
+
+function disposeCustomMap(m) {
+  const t = m.userData._customMap;
+  if (t) { t.dispose(); m.userData._customMap = null; }
+}
+
+function updateTexUi(m) {
+  $('texPick').textContent = m && m.map ? 'Replace' : 'Add';
+  $('texClear').disabled = !(m && m.map);
+  const c = $('texThumb');
+  const g = c.getContext('2d');
+  g.clearRect(0, 0, c.width, c.height);
+  g.fillStyle = '#4a4d54';
+  g.fillRect(0, 0, c.width, c.height);
+  const img = m && m.map && m.map.image;
+  if (img) {
+    try { g.drawImage(img, 0, 0, c.width, c.height); } catch (_) { /* unsupported image type: leave grey */ }
+  } else {
+    g.strokeStyle = '#8b9099';
+    g.setLineDash([3, 3]);
+    g.strokeRect(1, 1, c.width - 2, c.height - 2);
+  }
+}
+
+async function applyTextureFile(file) {
+  const m = getMats()[matMeta.selected];
+  if (!m) { toast('Select a material first.', true); return; }
+  toast('Loading texture…');
+  const url = URL.createObjectURL(file);
+  blobUrls.push(url);
+  const tex = await new Promise((resolve, reject) => texLoader.load(url, resolve, undefined, reject));
+  // Same settings MMDLoader uses for its own textures.
+  tex.flipY = false;
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  disposeCustomMap(m);
+  m.userData._customMap = tex;
+  m.map = tex;
+  if (/png|webp|gif|avif/i.test(file.type || file.name)) m.transparent = true;
+  m.needsUpdate = true;
+  loadPropsUi();
+  renderMatList();
+  toast('Texture applied: ' + file.name);
+}
+
+function removeTexture() {
+  const m = getMats()[matMeta.selected];
+  if (!m) return;
+  disposeCustomMap(m);
+  m.map = null;
+  m.needsUpdate = true;
+  loadPropsUi();
+  toast('Texture removed.');
 }
 
 function selectMaterial(i) {
@@ -556,6 +627,7 @@ function selectMaterial(i) {
   loadPropsUi();
   const row = $('matList').querySelector('li.sel');
   if (row) row.scrollIntoView({ block: 'nearest' });
+  if (kf) kf.refreshProps();
 }
 
 function buildOutliner(name) {
@@ -563,6 +635,7 @@ function buildOutliner(name) {
   $('matFilter').value = '';
   renderMatList();
   loadPropsUi();
+  if (kf) kf.refreshProps();
 }
 
 function setMaterialVisible(i, visible) {
@@ -598,6 +671,8 @@ function resetSelectedMaterial() {
   m.transparent = o.transparent;
   m.side = o.side;
   m.visible = o.visible;
+  disposeCustomMap(m);
+  m.map = o.map;
   const op = matOutlineParams(m);
   m.userData._outline = op ? op._origVisible : false;
   m.userData._edgeMul = 1;
@@ -657,6 +732,8 @@ function applyOptions() {
 async function play() {
   if (!state.mesh && !state.cameraClip) { toast('Load a model first.', true); return; }
   try { await listener.context.resume(); } catch (_) { /* ignore */ }
+  const total = getDuration();
+  if (total > 0 && state.elapsed >= total - 0.02) seekTo(0);   // finished: play again from the start
   state.playing = true;
   if (state.audio && !state.audio.isPlaying) state.audio.play();
   setPlayButton();
@@ -669,9 +746,66 @@ function pause() {
 }
 
 async function restart() {
-  if (!state.mesh) return;
-  rebuildAnimation();
+  if (!state.mesh && !state.cameraClip) return;
+  seekTo(0);
   await play();
+}
+
+/* ---- seeking / scrubbing ---- */
+function resetPhysics() {
+  const phys = state.mesh && helper.objects.get(state.mesh) && helper.objects.get(state.mesh).physics;
+  if (phys && typeof phys.reset === 'function') { try { phys.reset(); } catch (_) { /* ignore */ } }
+}
+
+// Restart (or stop) the music at time t. Playback state decides whether it keeps playing.
+function syncAudio(t, resume = state.playing) {
+  const a = state.audio;
+  if (!a) return;
+  try { a.stop(); } catch (_) { /* nothing was playing */ }
+  a.offset = t;
+  if (resume) a.play();
+}
+
+function seekTo(t, { audio = true } = {}) {
+  const total = getDuration();
+  t = Math.max(0, total > 0 ? Math.min(t, total) : t);
+  const md = motionDur();
+  if (md > 0 && (state.mesh || state.cameraClip)) {
+    const target = Math.min(t, md);
+    const physOn = helper.enabled.physics;
+    helper.enabled.physics = false;               // no physics jumps while jumping in time
+    try { helper.update(target - state.motionTime); } finally { helper.enabled.physics = physOn; }
+    state.motionTime = target;
+    resetPhysics();
+  }
+  state.elapsed = t;
+  if (kf) kf.markDirty();
+  if (audio) syncAudio(t);
+}
+
+const scrub = { was: false };
+function scrubStart() { scrub.was = state.playing; if (state.playing) pause(); }
+function scrubTo(t) { seekTo(t, { audio: false }); }
+function scrubEnd() { syncAudio(state.elapsed, false); if (scrub.was) { scrub.was = false; play(); } }
+
+// One step of playback. The MMD helper stops advancing at the end of the motion so the last pose
+// holds while longer music or keyframes keep running (the clips would otherwise loop).
+function advance(dt) {
+  const md = motionDur();
+  if (md === 0) {
+    helper.update(dt);
+  } else if (state.motionTime + dt <= md) {
+    helper.update(dt);
+    state.motionTime += dt;
+  } else {
+    if (state.motionTime < md) { helper.update(md - state.motionTime); state.motionTime = md; }
+    helper.enabled.animation = false;             // physics keeps settling, pose stays put
+    helper.update(dt);
+    helper.enabled.animation = true;
+  }
+  state.elapsed += dt;
+  const total = getDuration();
+  if (total > 0 && state.elapsed >= total) { state.elapsed = total; pause(); }
 }
 
 /* ------------------------------------------------------------------ *
@@ -711,9 +845,35 @@ $('gear').onclick = () => {
 for (const b of document.querySelectorAll('.tabs button')) {
   b.onclick = () => {
     for (const x of document.querySelectorAll('.tabs button')) x.setAttribute('aria-selected', String(x === b));
-    $('tab-scene').classList.toggle('on', b.dataset.tab === 'scene');
-    $('tab-render').classList.toggle('on', b.dataset.tab === 'render');
+    for (const k of ['scene', 'animate', 'render']) $('tab-' + k).classList.toggle('on', b.dataset.tab === k);
+    if (b.dataset.tab === 'animate' && kf) kf.onShow();
   };
+}
+
+// Texture add / replace / remove
+$('texPick').onclick = () => $('inTexture').click();
+$('texClear').onclick = removeTexture;
+$('inTexture').onchange = guard(async (e) => { const f = e.target.files[0]; e.target.value = ''; if (f) await applyTextureFile(f); });
+
+// Clickable / draggable progress bar
+{
+  const prog = $('progress');
+  let dragging = false;
+  const seekFromEvent = (e) => {
+    const r = prog.getBoundingClientRect();
+    scrubTo(Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)) * getDuration());
+  };
+  prog.addEventListener('pointerdown', (e) => {
+    if (getDuration() <= 0) return;
+    dragging = true;
+    prog.setPointerCapture(e.pointerId);
+    scrubStart();
+    seekFromEvent(e);
+  });
+  prog.addEventListener('pointermove', (e) => { if (dragging) seekFromEvent(e); });
+  const end = () => { if (!dragging) return; dragging = false; scrubEnd(); };
+  prog.addEventListener('pointerup', end);
+  prog.addEventListener('pointercancel', end);
 }
 
 // Outliner + material editor
@@ -801,12 +961,29 @@ document.addEventListener('visibilitychange', () => { if (document.hidden && sta
 /* ------------------------------------------------------------------ *
  *  Main loop
  * ------------------------------------------------------------------ */
+kf = createKeyframes({
+  $, camera, controls, state, toast,
+  getMesh: () => state.mesh,
+  getMats, matLabel, matOpacityGet, matOpacitySet,
+  getSelectedMat: () => matMeta.selected,
+  getDuration: mediaDuration,
+  seekTo, scrubStart, scrubTo, scrubEnd,
+});
+kf.refreshProps();
+
 const clock = new THREE.Clock();
 renderer.setAnimationLoop(() => {
   const dt = Math.min(clock.getDelta(), 0.1);
-  if (state.playing) { helper.update(dt); state.elapsed += dt; }
+  if (state.playing) advance(dt);
+
+  // Keyframes override the motion/camera values while playing, or once after a seek/edit.
+  if (kf.hasKeys() && (state.playing || kf.isDirty())) kf.applyAt(state.elapsed);
+  const camKeyed = kf.isCameraDriven() && state.playing;
+  controls.enabled = !(cameraMotionActive() || camKeyed);
+
   updateTimeUi();
-  if (!cameraMotionActive()) controls.update();
+  kf.tick();
+  if (!cameraMotionActive() && !camKeyed) controls.update();
   effect.render(scene, camera);
 });
 

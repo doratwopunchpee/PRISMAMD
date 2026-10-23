@@ -100,12 +100,33 @@
   .h2 { padding: 14px 14px 6px; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
   .pad { padding: 4px 14px 10px; }
 
+  /* ---- numbers, texture, animate tab ---- */
+  input[type=number] { height: 34px; padding: 0 8px; border-radius: 4px; border: 1px solid var(--line);
+    background: var(--field); color: var(--text); font: inherit; width: 100%; user-select: text; -webkit-user-select: text; }
+  .field input[type=number] { flex: 1; min-width: 0; }
+  .muted { color: var(--muted); }
+  #texThumb { flex: none; width: 40px; height: 40px; border-radius: 4px; border: 1px solid var(--line); }
+  #tab-animate { overflow-y: auto; }
+  #tab-animate .btns { display: flex; gap: 8px; flex-wrap: wrap; padding: 8px 12px; }
+  #kfEaseCanvas { display: block; width: 100%; max-width: 250px; aspect-ratio: 1 / 1; margin: 0 auto;
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px; touch-action: none; }
+  #kfCurve { display: block; width: 100%; height: 120px; border: 1px solid var(--line); border-radius: 4px; }
+  #timeline { flex: none; height: 236px; background: var(--panel-2); border-top: 1px solid var(--line);
+    display: none; flex-direction: column; }
+  #timeline.on { display: flex; }
+  .tl-head { flex: none; display: flex; align-items: center; gap: 6px; padding: 4px 10px;
+    background: var(--panel); border-bottom: 1px solid var(--line); }
+  .tl-head .title { font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  #tlWrap { flex: 1; min-height: 0; position: relative; }
+  canvas#tlCanvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+
   /* ---- transport ---- */
   #time { font: 13px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; color: var(--text);
     min-width: 150px; text-align: center; background: var(--field); border: 1px solid var(--line);
     border-radius: 4px; height: 38px; line-height: 36px; flex: none; }
-  #progress { flex: 1; height: 6px; background: var(--field); border-radius: 3px; overflow: hidden; min-width: 60px; }
-  #progress > div { height: 100%; width: 0; background: var(--accent); }
+  #progress { flex: 1; position: relative; height: 30px; min-width: 60px; touch-action: none; }
+  #progress::before { content: ''; position: absolute; left: 0; right: 0; top: 12px; height: 6px; background: var(--field); border-radius: 3px; }
+  #progress > div { position: absolute; left: 0; top: 12px; height: 6px; width: 0; background: var(--accent); border-radius: 3px; }
   #toast { max-width: 30vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     font-size: 12px; color: var(--muted); flex: none; }
   #toast.err { color: var(--danger); }
@@ -131,6 +152,7 @@
     <button id="btnMotion">Motion</button>
     <button id="btnAudio">Audio</button>
     <span class="grow"></span>
+    <button id="btnTimeline" aria-pressed="false" aria-label="Show or hide timeline">Timeline</button>
     <button id="gear" aria-pressed="true" aria-label="Show or hide panels">Panels</button>
   </div>
 
@@ -148,6 +170,7 @@
     <aside id="dock">
       <div class="tabs" role="tablist">
         <button role="tab" id="tabBtnScene" aria-selected="true" data-tab="scene">Scene</button>
+        <button role="tab" id="tabBtnAnimate" aria-selected="false" data-tab="animate">Animate</button>
         <button role="tab" id="tabBtnRender" aria-selected="false" data-tab="render">Render</button>
       </div>
 
@@ -175,9 +198,43 @@
             <label class="field"><span>Outline</span><input id="matOutline" type="checkbox"></label>
             <label class="field"><span>Edge width</span><input id="matEdge" type="range" min="0.2" max="4" step="0.05"><b class="val" id="matEdgeVal"></b></label>
             <label class="field"><span>Double-sided</span><input id="matDouble" type="checkbox"></label>
+            <div class="field"><span>Texture</span><canvas id="texThumb" width="40" height="40"></canvas>
+              <button class="small" id="texPick">Add</button><button class="small" id="texClear">Remove</button></div>
             <div class="actions"><button class="small" id="matReset">Reset material</button></div>
           </div>
         </div>
+      </section>
+
+      <!-- Animate: keyframes -->
+      <section id="tab-animate" class="tabpage">
+        <div class="sect-head"><div class="title">Keyframes</div></div>
+        <div class="h2">Property</div>
+        <div class="pad"><select id="kfProp" aria-label="Property to animate"></select></div>
+        <label class="field"><span>Value</span><input id="kfValue" type="number" step="any"></label>
+        <div class="btns">
+          <button class="small accent" id="kfSet">Set key at playhead</button>
+        </div>
+        <div class="btns" style="padding-top:0">
+          <button class="small" id="kfKeyCam">Key camera view</button>
+          <button class="small" id="kfKeyModel">Key model transform</button>
+        </div>
+        <div id="kfNone" class="pad muted">No key selected. Tap a diamond on the timeline to edit it.</div>
+        <div id="kfKeyBox" style="display:none">
+          <div class="sect-head" style="border-top:1px solid var(--line)"><div class="title" id="kfKeyTitle">Key</div></div>
+          <label class="field"><span>Time (s)</span><input id="kfKeyTime" type="number" step="0.01" min="0"></label>
+          <label class="field"><span>Value</span><input id="kfKeyVal" type="number" step="any"></label>
+          <label class="field"><span>Easing</span><select id="kfEase" aria-label="Easing preset"></select></label>
+          <div class="h2">Graph</div>
+          <div class="btns" style="padding-top:0">
+            <button class="small" id="kfViewValue" aria-pressed="true">Value</button>
+            <button class="small" id="kfViewVel" aria-pressed="false">Velocity</button>
+          </div>
+          <div class="pad"><canvas id="kfEaseCanvas"></canvas></div>
+          <div class="pad muted" style="font-size:12px">Value: drag the two handles to shape the curve to the next key (above the box = overshoot). Velocity: the speed of that curve. Elastic, Bounce and Hold are fixed shapes.</div>
+          <div class="btns"><button class="small" id="kfDel">Delete key</button></div>
+        </div>
+        <div class="h2">Value over time</div>
+        <div class="pad"><canvas id="kfCurve"></canvas></div>
       </section>
 
       <!-- Render: shader + scene options -->
@@ -193,6 +250,20 @@
         <label class="row"><span>Camera motion</span><input id="optCam" type="checkbox" checked></label>
       </section>
     </aside>
+  </div>
+
+  <div id="timeline">
+    <div class="tl-head">
+      <div class="title">Timeline</div>
+      <span class="grow"></span>
+      <button class="small" id="tlPrev">Prev key</button>
+      <button class="small" id="tlNext">Next key</button>
+      <span class="sep"></span>
+      <button class="small" id="tlZoomOut" aria-label="Zoom out">−</button>
+      <button class="small" id="tlZoomIn" aria-label="Zoom in">+</button>
+      <button class="small" id="tlFit">Fit</button>
+    </div>
+    <div id="tlWrap"><canvas id="tlCanvas"></canvas></div>
   </div>
 
   <div class="transport">
@@ -215,6 +286,7 @@
 <input id="inModel"  type="file" accept=".zip,application/zip,application/x-zip-compressed">
 <input id="inMotion" type="file" accept=".vmd,.vpd" multiple>
 <input id="inAudio"  type="file" accept="audio/*">
+<input id="inTexture" type="file" accept="image/*">
 
 <!-- Pick local libraries (assets/www/lib, created by tools/vendor-libs.sh) when present, else a pinned CDN. -->
 <script>
