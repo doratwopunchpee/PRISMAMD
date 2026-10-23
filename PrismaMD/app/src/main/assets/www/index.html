@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<title>PrismaMD</title>
+<style>
+  :root {
+    --bg:        #1f2023;
+    --toolbar:   #2b2d31;
+    --panel:     #2b2d31;
+    --panel-2:   #25272b;
+    --field:     #36383d;
+    --field-hi:  #414449;
+    --line:      #3b3e44;
+    --text:      #d9dbe0;
+    --muted:     #8b9099;
+    --accent:    #4a8fd9;
+    --accent-bg: rgba(74, 143, 217, .22);
+    --danger:    #d9736f;
+    --bar-h:     52px;
+    --dock-w:    330px;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 14px/1.3 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    overflow: hidden; user-select: none; -webkit-user-select: none; }
+
+  #app { position: fixed; inset: 0; display: flex; flex-direction: column; }
+  .toolbar, .transport { flex: none; height: var(--bar-h); background: var(--toolbar);
+    display: flex; align-items: center; gap: 6px; padding: 0 10px; }
+  .toolbar  { border-bottom: 1px solid var(--line); }
+  .transport { border-top: 1px solid var(--line); }
+  #main { flex: 1; min-height: 0; display: flex; position: relative; }
+  #stage { flex: 1; min-width: 0; position: relative; }
+  canvas#view { position: absolute; inset: 0; width: 100%; height: 100%; display: block; touch-action: none; }
+
+  /* ---- controls ---- */
+  button, select, input[type=text] {
+    height: 38px; min-width: 38px; padding: 0 14px; border-radius: 4px;
+    border: 1px solid var(--line); background: var(--field); color: var(--text);
+    font: inherit; display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  }
+  input[type=text] { justify-content: flex-start; width: 100%; user-select: text; -webkit-user-select: text; }
+  button:active { background: var(--field-hi); }
+  button:disabled { opacity: .45; }
+  button[aria-pressed="true"] { background: var(--field-hi); border-color: var(--accent); }
+  button.accent { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.accent:active { background: #5b9ce0; }
+  button.small { height: 32px; padding: 0 10px; font-size: 13px; }
+  select { padding: 0 10px; width: 100%; appearance: none; -webkit-appearance: none; }
+  .sep { width: 1px; height: 24px; background: var(--line); margin: 0 4px; flex: none; }
+  .grow { flex: 1; }
+  .label { color: var(--muted); font-size: 12px; }
+  svg.i { width: 18px; height: 18px; fill: currentColor; flex: none; }
+  .brand { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 16px; letter-spacing: .2px; padding-right: 6px; }
+  .brand svg { width: 22px; height: 22px; fill: none; stroke: var(--accent); stroke-width: 1.8; stroke-linejoin: round; }
+
+  /* ---- dock (right) ---- */
+  #dock { width: var(--dock-w); flex: none; background: var(--panel); border-left: 1px solid var(--line);
+    display: flex; flex-direction: column; min-height: 0; }
+  #dock.hidden { display: none; }
+  .tabs { flex: none; display: flex; border-bottom: 1px solid var(--line); }
+  .tabs button { flex: 1; height: 42px; border: 0; border-radius: 0; background: transparent;
+    color: var(--muted); border-bottom: 2px solid transparent; }
+  .tabs button[aria-selected="true"] { color: var(--text); border-bottom-color: var(--accent); }
+  .tabpage { flex: 1; min-height: 0; display: none; flex-direction: column; }
+  .tabpage.on { display: flex; }
+
+  .sect-head { flex: none; display: flex; align-items: center; gap: 6px; padding: 8px 10px;
+    background: var(--panel-2); border-bottom: 1px solid var(--line); }
+  .sect-head .title { flex: 1; font-size: 12px; font-weight: 600; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .06em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #filterWrap { flex: none; padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  #filterWrap input { height: 34px; }
+
+  #matList { list-style: none; margin: 0; padding: 0; overflow-y: auto; flex: 1 1 40%; min-height: 110px; }
+  #matList li { display: flex; align-items: center; height: 44px; border-bottom: 1px solid var(--line); padding-right: 8px; }
+  #matList li.sel { background: var(--accent-bg); box-shadow: inset 3px 0 0 var(--accent); }
+  #matList li.off .nm { color: var(--muted); text-decoration: line-through; }
+  #matList .eye { flex: none; width: 44px; height: 44px; border: 0; border-radius: 0; background: transparent; color: var(--text); padding: 0; }
+  #matList .eye.off { color: var(--muted); }
+  #matList .swatch { flex: none; width: 14px; height: 14px; border-radius: 3px; border: 1px solid rgba(255,255,255,.25); margin-right: 8px; }
+  #matList .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; height: 44px; line-height: 44px; }
+  #matEmpty { padding: 18px 14px; color: var(--muted); }
+
+  #props { flex: 0 1 auto; max-height: 52%; overflow-y: auto; border-top: 1px solid var(--line); }
+  .field { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 12px; border-bottom: 1px solid var(--line); }
+  .field > span { flex: none; width: 86px; color: var(--muted); font-size: 13px; }
+  .field input[type=range] { flex: 1; min-width: 0; accent-color: var(--accent); height: 28px; }
+  .field input[type=checkbox] { width: 22px; height: 22px; accent-color: var(--accent); }
+  .field input[type=color] { width: 56px; height: 30px; padding: 0; border: 1px solid var(--line); background: var(--field); border-radius: 4px; }
+  .field .val { flex: none; width: 40px; text-align: right; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+  #propsEmpty { padding: 16px 14px; color: var(--muted); }
+  #props .actions { display: flex; gap: 8px; padding: 10px 12px; }
+
+  #tab-render { overflow-y: auto; }
+  .row { display: flex; align-items: center; justify-content: space-between; min-height: 46px; padding: 0 14px; border-bottom: 1px solid var(--line); }
+  .row input[type=checkbox] { width: 22px; height: 22px; accent-color: var(--accent); }
+  .h2 { padding: 14px 14px 6px; font-size: 12px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: .06em; }
+  .pad { padding: 4px 14px 10px; }
+
+  /* ---- transport ---- */
+  #time { font: 13px ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace; color: var(--text);
+    min-width: 150px; text-align: center; background: var(--field); border: 1px solid var(--line);
+    border-radius: 4px; height: 38px; line-height: 36px; flex: none; }
+  #progress { flex: 1; height: 6px; background: var(--field); border-radius: 3px; overflow: hidden; min-width: 60px; }
+  #progress > div { height: 100%; width: 0; background: var(--accent); }
+  #toast { max-width: 30vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    font-size: 12px; color: var(--muted); flex: none; }
+  #toast.err { color: var(--danger); }
+
+  #empty { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 6px; text-align: center; padding: 24px; pointer-events: none; color: var(--muted); }
+  #empty strong { color: var(--text); font-weight: 600; font-size: 16px; }
+  #empty p { margin: 0; max-width: 460px; }
+  #empty.hidden { display: none; }
+  input[type=file] { display: none; }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <div class="toolbar">
+    <div class="brand">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 3 20h18z"/><path d="M12 3v17"/></svg>
+      PrismaMD
+    </div>
+    <span class="sep"></span>
+    <button id="btnModel">Model</button>
+    <button id="btnMotion">Motion</button>
+    <button id="btnAudio">Audio</button>
+    <span class="grow"></span>
+    <button id="gear" aria-pressed="true" aria-label="Show or hide panels">Panels</button>
+  </div>
+
+  <div id="main">
+    <div id="stage">
+      <canvas id="view"></canvas>
+      <div id="empty">
+        <strong>No model loaded</strong>
+        <p>Choose <b>Model</b> and pick a ZIP containing a PMX/PMD model with its textures.
+           Then add a motion (.vmd / .vpd) and optional audio.</p>
+        <p>One finger orbits. Two fingers zoom and pan. Tap the model to select a material.</p>
+      </div>
+    </div>
+
+    <aside id="dock">
+      <div class="tabs" role="tablist">
+        <button role="tab" id="tabBtnScene" aria-selected="true" data-tab="scene">Scene</button>
+        <button role="tab" id="tabBtnRender" aria-selected="false" data-tab="render">Render</button>
+      </div>
+
+      <!-- Scene: outliner + material properties -->
+      <section id="tab-scene" class="tabpage on">
+        <div class="sect-head">
+          <div class="title" id="modelName">Materials</div>
+          <button class="small" id="btnShowAll">Show all</button>
+          <button class="small" id="btnHideAll">Hide all</button>
+          <button class="small" id="btnSolo">Solo</button>
+        </div>
+        <div id="filterWrap"><input id="matFilter" type="text" placeholder="Filter materials" autocomplete="off" autocapitalize="off" spellcheck="false"></div>
+        <ul id="matList"></ul>
+        <div id="matEmpty">Load a model to see its materials.</div>
+
+        <div class="sect-head" style="border-top:1px solid var(--line)">
+          <div class="title" id="propsTitle">Material</div>
+        </div>
+        <div id="props">
+          <div id="propsEmpty">Select a material in the list, or tap the model.</div>
+          <div id="propsBody" style="display:none">
+            <label class="field"><span>Visible</span><input id="matVisible" type="checkbox"></label>
+            <label class="field"><span>Color</span><input id="matColor" type="color"></label>
+            <label class="field"><span>Opacity</span><input id="matOpacity" type="range" min="0" max="1" step="0.01"><b class="val" id="matOpacityVal"></b></label>
+            <label class="field"><span>Outline</span><input id="matOutline" type="checkbox"></label>
+            <label class="field"><span>Edge width</span><input id="matEdge" type="range" min="0.2" max="4" step="0.05"><b class="val" id="matEdgeVal"></b></label>
+            <label class="field"><span>Double-sided</span><input id="matDouble" type="checkbox"></label>
+            <div class="actions"><button class="small" id="matReset">Reset material</button></div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Render: shader + scene options -->
+      <section id="tab-render" class="tabpage">
+        <div class="h2">Shader</div>
+        <div class="pad"><select id="preset" aria-label="Shader preset"></select></div>
+        <div class="h2">Display</div>
+        <label class="row"><span>Outline</span><input id="optOutline" type="checkbox" checked></label>
+        <label class="row"><span>Shadows</span><input id="optShadow" type="checkbox" checked></label>
+        <label class="row"><span>Grid</span><input id="optGrid" type="checkbox" checked></label>
+        <div class="h2">Playback</div>
+        <label class="row"><span>Physics</span><input id="optPhysics" type="checkbox" checked></label>
+        <label class="row"><span>Camera motion</span><input id="optCam" type="checkbox" checked></label>
+      </section>
+    </aside>
+  </div>
+
+  <div class="transport">
+    <button id="btnRestart" aria-label="Return to start">
+      <svg class="i" viewBox="0 0 24 24"><path d="M6 5h2v14H6zM20 5v14L9.5 12z"/></svg>
+    </button>
+    <button id="btnPlay" class="accent" aria-label="Play or pause" style="min-width:56px">
+      <svg class="i" id="icoPlay" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
+      <svg class="i" id="icoPause" viewBox="0 0 24 24" style="display:none"><path d="M7 5h4v14H7zM13 5h4v14h-4z"/></svg>
+    </button>
+    <button id="btnFit" aria-label="Reset camera">Reset view</button>
+    <span class="sep"></span>
+    <div id="time">00:00.0 / 00:00.0</div>
+    <div id="progress"><div></div></div>
+    <span class="sep"></span>
+    <div id="toast">Ready</div>
+  </div>
+</div>
+
+<input id="inModel"  type="file" accept=".zip,application/zip,application/x-zip-compressed">
+<input id="inMotion" type="file" accept=".vmd,.vpd" multiple>
+<input id="inAudio"  type="file" accept="audio/*">
+
+<!-- Pick local libraries (assets/www/lib, created by tools/vendor-libs.sh) when present, else a pinned CDN. -->
+<script>
+(function () {
+  var base = 'https://cdn.jsdelivr.net/npm/three@0.160.0/';
+  var zip  = 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js';
+  try {
+    var x = new XMLHttpRequest();
+    x.open('HEAD', 'lib/three/build/three.module.js', false);
+    x.send();
+    if (x.status === 200) {
+      base = new URL('lib/three/', location.href).href;
+      zip  = new URL('lib/jszip.min.js', location.href).href;
+    }
+  } catch (e) { /* no local copy: use the CDN */ }
+  window.__LIBS = { three: base, jszip: zip };
+  var m = document.createElement('script');
+  m.type = 'importmap';
+  m.textContent = JSON.stringify({ imports: { 'three': base + 'build/three.module.js', 'three/addons/': base + 'examples/jsm/' } });
+  document.head.appendChild(m);
+})();
+function engineFail() {
+  var t = document.getElementById('toast');
+  t.textContent = 'Could not load the 3D engine. Connect to the internet once, or run tools/vendor-libs.sh.';
+  t.className = 'err';
+}
+</script>
+<script type="module" src="app.js" onerror="engineFail()"></script>
+</body>
+</html>
